@@ -1,0 +1,49 @@
+{
+  "name": "pulseboard",
+  "version": "1.0.0",
+  "description": "一款简洁、漂亮、可长期保存历史记录的 Windows 资源监控看板",
+  "main": "src/main.js",
+  "author": "piercemacleod0-hub",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "dependencies": {
+    "systeminformation": "^5.27.7"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.piercemacleod.pulseboard",
+    "productName": "PulseBoard",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.svg",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "PulseBoard-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PulseBoard 资源看板"
+    },
+    "portable": {
+      "artifactName": "PulseBoard-Portable-${version}-${arch}.${ext}"
+    }
+  }
+}
