@@ -10,25 +10,26 @@ const si = require('systeminformation');
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_DIR = path.resolve(process.env.PULSEBOARD_DATA_DIR || path.join(__dirname, 'data'));
+let DATA_DIR = path.resolve(process.env.PULSEBOARD_DATA_DIR || path.join(__dirname, 'data'));
 const HOST_PROC = path.resolve(process.env.HOST_PROC || '/proc');
 const HOST_SYS = path.resolve(process.env.HOST_SYS || '/sys');
-const PORT = Math.max(1, Math.min(65535, Number(process.env.PORT) || 8090));
+let PORT = Math.max(1, Math.min(65535, Number(process.env.PORT) || 8090));
 const SAMPLE_MS = Math.max(2000, Number(process.env.PULSEBOARD_SAMPLE_MS) || 5000);
-const RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process.env.PULSEBOARD_RETENTION_DAYS) || 30));
-const PASSWORD = process.env.PULSEBOARD_PASSWORD || 'pulseboard';
+let RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process.env.PULSEBOARD_RETENTION_DAYS) || 30));
+let PASSWORD = process.env.PULSEBOARD_PASSWORD || 'pulseboard';
 const MAX_POINTS = 1200;
 const SESSION_TTL = 7 * 86400000;
 
 let latest = null;
 let collecting = false;
 let lastCleanup = 0;
+let readOnly = false;
+let collectorTimer = null;
+let serverVersion = '2.1.0';
+let serverPlatform = 'NAS / Linux Web';
+let serverHostName = null;
 let previous = { cpu: null, disk: null, net: null, time: null };
 const sessions = new Map();
-
-if (!process.env.PULSEBOARD_PASSWORD) {
-  console.warn('[PulseBoard] 未设置 PULSEBOARD_PASSWORD，当前使用开发密码 pulseboard。');
-}
 
 function number(value, fallback = 0) {
   const parsed = Number(value);
@@ -227,6 +228,17 @@ function readHistory(since) {
   return sampled;
 }
 
+function readLatestFromHistory() {
+  if (!fs.existsSync(DATA_DIR)) return latest;
+  const file = fs.readdirSync(DATA_DIR).filter((name) => name.endsWith('.jsonl')).sort().at(-1);
+  if (!file) return latest;
+  const lines = fs.readFileSync(path.join(DATA_DIR, file), 'utf8').trim().split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try { return JSON.parse(lines[index]); } catch { /* 继续寻找上一条完整记录 */ }
+  }
+  return latest;
+}
+
 function parseCookies(header = '') {
   return Object.fromEntries(header.split(';').map((item) => item.trim().split('=').map(decodeURIComponent)).filter((pair) => pair.length === 2));
 }
@@ -288,7 +300,7 @@ function loginPage(error) {
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  if (url.pathname === '/api/health') return json(response, { ok: true, version: '2.0.0' });
+  if (url.pathname === '/api/health') return json(response, { ok: true, version: serverVersion, mode: readOnly ? 'desktop-share' : 'standalone' });
   if (url.pathname === '/favicon.ico') { response.writeHead(204); return response.end(); }
   if (url.pathname === '/login.css') return serveFile(response, path.join(PUBLIC_DIR, 'login.css'), 'text/css; charset=utf-8');
   if (url.pathname === '/login' && request.method === 'GET') return send(response, 200, loginPage(url.searchParams.has('error')), 'text/html; charset=utf-8');
@@ -302,8 +314,8 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === '/logout') return redirect(response, '/login', 'pb_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
   if (!isAuthenticated(request)) return redirect(response, '/login');
 
-  if (url.pathname === '/api/latest') return json(response, latest);
-  if (url.pathname === '/api/info') return json(response, { version: '2.0.0', retentionDays: RETENTION_DAYS, host: readHostName(), platform: 'NAS / Linux Web' });
+  if (url.pathname === '/api/latest') { if (readOnly) latest = readLatestFromHistory(); return json(response, latest); }
+  if (url.pathname === '/api/info') return json(response, { version: serverVersion, retentionDays: RETENTION_DAYS, host: serverHostName || readHostName(), platform: serverPlatform });
   if (url.pathname === '/api/history') {
     const range = Math.min(Math.max(number(url.searchParams.get('range'), 21600000), 3600000), RETENTION_DAYS * 86400000);
     return json(response, readHistory(Date.now() - range));
@@ -316,15 +328,51 @@ const server = http.createServer(async (request, response) => {
   send(response, 404, 'Not Found');
 });
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-collectSample().finally(() => {
-  setInterval(collectSample, SAMPLE_MS);
-  server.listen(PORT, '0.0.0.0', () => console.log(`[PulseBoard] NAS Web 已启动：http://0.0.0.0:${PORT}`));
-});
+async function startServer(options = {}) {
+  if (server.listening) return server;
+  DATA_DIR = path.resolve(options.dataDir || DATA_DIR);
+  PORT = Math.max(1, Math.min(65535, number(options.port, PORT)));
+  PASSWORD = options.password || PASSWORD;
+  if (!options.password && !process.env.PULSEBOARD_PASSWORD) console.warn('[PulseBoard] 未设置 PULSEBOARD_PASSWORD，当前使用开发密码 pulseboard。');
+  RETENTION_DAYS = Math.max(1, Math.min(3650, number(options.retentionDays, RETENTION_DAYS)));
+  readOnly = Boolean(options.readOnly);
+  serverVersion = options.version || serverVersion;
+  serverPlatform = options.platform || serverPlatform;
+  serverHostName = options.hostName || null;
+  sessions.clear();
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (readOnly) latest = readLatestFromHistory();
+  else {
+    await collectSample();
+    collectorTimer = setInterval(collectSample, SAMPLE_MS);
+  }
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(PORT, '0.0.0.0', () => { server.removeListener('error', reject); resolve(); });
+  });
+  console.log(`[PulseBoard] Web 已启动：http://0.0.0.0:${PORT}`);
+  return server;
+}
+
+async function stopServer() {
+  if (collectorTimer) { clearInterval(collectorTimer); collectorTimer = null; }
+  if (!server.listening) return;
+  await new Promise((resolve) => server.close(resolve));
+  sessions.clear();
+}
 
 function shutdown() {
-  server.close(() => process.exit(0));
+  stopServer().finally(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+module.exports = { startServer, stopServer };
+
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error('[PulseBoard] 启动失败:', error.message);
+    process.exit(1);
+  });
+}

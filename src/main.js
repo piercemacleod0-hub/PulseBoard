@@ -1,7 +1,9 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
+const QRCode = require('qrcode');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const si = require('systeminformation');
@@ -16,8 +18,11 @@ let quitting = false;
 let collecting = false;
 let timer;
 let latest = null;
+let shareSettings = null;
+let webServerModule = null;
 
 const dataDir = path.join(app.getPath('userData'), 'history');
+const settingsFile = path.join(app.getPath('userData'), 'settings.json');
 
 function dayKey(timestamp = Date.now()) {
   const d = new Date(timestamp);
@@ -31,6 +36,62 @@ function historyFile(timestamp = Date.now()) {
 function number(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function defaultShareSettings() {
+  return { enabled: false, password: `PB-${crypto.randomBytes(4).toString('hex')}`, port: 8090 };
+}
+
+function loadShareSettings() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    return { ...defaultShareSettings(), ...saved, enabled: Boolean(saved.enabled) };
+  } catch { return defaultShareSettings(); }
+}
+
+function saveShareSettings() {
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify(shareSettings, null, 2), 'utf8');
+}
+
+function lanAddresses() {
+  const addresses = [];
+  for (const interfaces of Object.values(os.networkInterfaces())) {
+    for (const item of interfaces || []) {
+      if (item.family === 'IPv4' && !item.internal && !item.address.startsWith('169.254.')) addresses.push(item.address);
+    }
+  }
+  return [...new Set(addresses)].sort((left, right) => {
+    const score = (ip) => /^192\.168\.|^10\.|^172\.(1[6-9]|2\d|3[01])\./.test(ip) ? 0 : 1;
+    return score(left) - score(right);
+  });
+}
+
+async function startMobileSharing() {
+  if (!webServerModule) webServerModule = require('../server/index.js');
+  await webServerModule.stopServer();
+  await webServerModule.startServer({
+    readOnly: true,
+    dataDir,
+    password: shareSettings.password,
+    port: shareSettings.port,
+    retentionDays: RETENTION_DAYS,
+    version: app.getVersion(),
+    platform: 'Windows 手机共享',
+    hostName: os.hostname()
+  });
+}
+
+async function stopMobileSharing() {
+  if (webServerModule) await webServerModule.stopServer();
+}
+
+async function sharingInfo() {
+  const addresses = lanAddresses();
+  const urls = addresses.map((address) => `http://${address}:${shareSettings.port}`);
+  const primaryUrl = urls[0] || `http://127.0.0.1:${shareSettings.port}`;
+  const qrCode = shareSettings.enabled ? await QRCode.toDataURL(primaryUrl, { margin: 1, width: 220, color: { dark: '#0b1020', light: '#ffffff' } }) : null;
+  return { ...shareSettings, urls, primaryUrl, qrCode, hasLanAddress: addresses.length > 0 };
 }
 
 async function readDiskStats() {
@@ -146,6 +207,10 @@ function createWindow() {
       setTimeout(async () => {
         await mainWindow.webContents.executeJavaScript(`
           (() => {
+            if (${Boolean(process.env.PULSEBOARD_SCREENSHOT_SHARE)}) {
+              document.getElementById('shareButton')?.click();
+              return;
+            }
             const canvas = document.getElementById('cpuChart');
             const rect = canvas.getBoundingClientRect();
             canvas.dispatchEvent(new MouseEvent('click', {
@@ -185,10 +250,18 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
+  shareSettings = loadShareSettings();
+  if (process.env.PULSEBOARD_TEST_SHARE_PASSWORD) {
+    shareSettings = { ...shareSettings, enabled: true, password: process.env.PULSEBOARD_TEST_SHARE_PASSWORD, port: number(process.env.PULSEBOARD_TEST_SHARE_PORT, 8090) };
+  }
   createWindow();
   createTray();
   await collectSample();
   timer = setInterval(collectSample, SAMPLE_MS);
+  if (shareSettings.enabled) {
+    try { await startMobileSharing(); }
+    catch (error) { shareSettings.enabled = false; saveShareSettings(); mainWindow.webContents.send('sharing-error', error.message); }
+  }
 });
 
 app.on('activate', () => {
@@ -196,9 +269,10 @@ app.on('activate', () => {
   mainWindow.show();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   quitting = true;
   clearInterval(timer);
+  await stopMobileSharing();
 });
 
 app.on('window-all-closed', (event) => event.preventDefault());
@@ -210,3 +284,14 @@ ipcMain.handle('history:get', (_event, rangeMs) => {
 ipcMain.handle('latest:get', () => latest);
 ipcMain.handle('data:open', () => shell.openPath(dataDir));
 ipcMain.handle('app:info', () => ({ version: app.getVersion(), retentionDays: RETENTION_DAYS, host: os.hostname() }));
+ipcMain.handle('sharing:get', () => sharingInfo());
+ipcMain.handle('sharing:update', async (_event, input) => {
+  const password = String(input?.password || '').trim();
+  if (password.length < 6 || password.length > 64) throw new Error('访问密码需要 6–64 个字符');
+  shareSettings = { ...shareSettings, enabled: Boolean(input.enabled), password };
+  if (shareSettings.enabled) await startMobileSharing();
+  else await stopMobileSharing();
+  saveShareSettings();
+  return sharingInfo();
+});
+ipcMain.handle('clipboard:write', (_event, text) => clipboard.writeText(String(text || '')));

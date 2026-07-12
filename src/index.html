@@ -17,6 +17,7 @@
       </div>
       <div class="top-actions">
         <div class="status"><span class="status-dot"></span><span id="statusText">正在采集</span></div>
+        <button id="shareButton" class="ghost-button share-button"><span></span>手机访问</button>
         <button id="openData" class="ghost-button">打开数据目录</button>
       </div>
     </header>
@@ -88,6 +89,22 @@
 
     <footer><span id="hostInfo">本机</span><span>数据仅保存在你的电脑中</span><span id="lastUpdated">等待首条数据</span></footer>
   </main>
+  <div id="shareModal" class="share-modal" aria-hidden="true">
+    <section class="share-panel" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+      <header><div><p>局域网实时共享</p><h2 id="shareTitle">用手机查看这台电脑</h2></div><button id="shareClose" aria-label="关闭">×</button></header>
+      <p class="share-intro">手机和电脑连接同一个 Wi-Fi 后，可以同时查看实时数据和最近 30 天历史记录。</p>
+      <label class="share-toggle"><span><strong>允许手机访问</strong><small>开启后电脑会在局域网监听 8090 端口</small></span><input id="shareToggle" type="checkbox"><i></i></label>
+      <label class="share-password"><span>访问密码</span><input id="sharePassword" type="text" minlength="6" maxlength="64" autocomplete="off"></label>
+      <button id="shareSave" class="share-save">保存设置</button>
+      <p id="shareMessage" class="share-message"></p>
+      <div id="shareAccess" class="share-access" hidden>
+        <div class="share-qr"><img id="shareQr" alt="手机访问二维码"></div>
+        <div class="share-details"><span>手机访问地址</span><strong id="shareUrl">--</strong><button id="shareCopy">复制地址</button><ol><li>确保手机与电脑连接同一 Wi-Fi</li><li>扫码或在手机浏览器输入上方地址</li><li>输入本窗口显示的访问密码</li></ol></div>
+      </div>
+      <aside>首次开启时 Windows 可能询问是否允许网络访问，请选择“允许专用网络”。</aside>
+    </section>
+  </div>
   <script src="renderer.js"></script>
+  <script src="sharing.js"></script>
 </body>
 </html>
