@@ -144,6 +144,18 @@ function createWindow() {
   if (process.env.PULSEBOARD_SCREENSHOT) {
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
+        await mainWindow.webContents.executeJavaScript(`
+          (() => {
+            const canvas = document.getElementById('cpuChart');
+            const rect = canvas.getBoundingClientRect();
+            canvas.dispatchEvent(new MouseEvent('click', {
+              bubbles: true,
+              clientX: rect.left + rect.width * 0.72,
+              clientY: rect.top + rect.height * 0.45
+            }));
+          })()
+        `);
+        await new Promise((resolve) => setTimeout(resolve, 250));
         const image = await mainWindow.webContents.capturePage();
         fs.writeFileSync(process.env.PULSEBOARD_SCREENSHOT, image.toPNG());
       }, 7000);
