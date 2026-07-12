@@ -1,5 +1,23 @@
 # 更新日志
 
+## 2.0.0 - 2026-07-12
+
+### 新增
+
+- Linux / NAS Web 版，可通过电脑、手机和平板浏览器访问。
+- Docker Compose 一键部署，支持 AMD64 与 ARM64。
+- 直接读取 Linux 主机 `/proc` 与 `/sys` 的 CPU、内存、磁盘和网络指标。
+- 内置密码登录与 7 天登录会话。
+- 响应式移动端布局。
+- NVIDIA Container Toolkit 可选 GPU 监控。
+- GitHub Actions 自动构建并发布多架构 GHCR 镜像。
+
+### 安全与数据
+
+- 历史数据通过 `/data` 挂载目录持久保存。
+- `/proc` 与 `/sys` 使用只读挂载。
+- 容器启用 `no-new-privileges`，并提供健康检查。
+
 ## 1.1.0 - 2026-07-12
 
 ### 新增

@@ -1,0 +1,17 @@
+services:
+  pulseboard:
+    image: ghcr.io/piercemacleod0-hub/pulseboard:latest
+    container_name: pulseboard
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      PULSEBOARD_PASSWORD: ${PULSEBOARD_PASSWORD:?请先在 .env 中设置 PULSEBOARD_PASSWORD}
+      PULSEBOARD_RETENTION_DAYS: ${PULSEBOARD_RETENTION_DAYS:-30}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./pulseboard-data:/data
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    security_opt:
+      - no-new-privileges:true

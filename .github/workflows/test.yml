@@ -1,0 +1,46 @@
+name: 代码与 Linux 服务测试
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 语法和依赖检查
+        run: |
+          npm run check
+          npm audit --omit=dev
+
+      - name: 启动 Linux / NAS 服务
+        env:
+          PULSEBOARD_PASSWORD: ci-test-password
+          PULSEBOARD_DATA_DIR: /tmp/pulseboard-data
+          PORT: 8090
+        run: |
+          npm run server > /tmp/pulseboard.log 2>&1 &
+          echo $! > /tmp/pulseboard.pid
+          for i in {1..20}; do
+            curl -fsS http://127.0.0.1:8090/api/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8090/api/health | grep '"ok":true'
+          test -s /tmp/pulseboard-data/*.jsonl
+
+      - name: 输出服务日志
+        if: always()
+        run: cat /tmp/pulseboard.log || true

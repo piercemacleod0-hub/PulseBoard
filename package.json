@@ -1,13 +1,14 @@
 {
   "name": "pulseboard",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "一款简洁、漂亮、可长期保存历史记录的 Windows 资源监控看板",
   "main": "src/main.js",
   "author": "piercemacleod0-hub",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "server": "node server/index.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js && node --check server/index.js && node --check server/public/bridge.js",
     "dist": "electron-builder --win nsis portable"
   },
   "dependencies": {
@@ -25,6 +26,7 @@
     },
     "files": [
       "src/**/*",
+      "server/**/*",
       "build/icon.svg",
       "package.json"
     ],
