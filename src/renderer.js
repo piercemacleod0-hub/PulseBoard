@@ -9,6 +9,7 @@ function bytes(value) {
   const amount = Number(value) || 0;
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   if (amount <= 0) return '0 B';
+  if (amount < 1) return `${amount.toFixed(1)} B`;
   const index = Math.min(Math.floor(Math.log(amount) / Math.log(1024)), units.length - 1);
   return `${(amount / 1024 ** index).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
 }

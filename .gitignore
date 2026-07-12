@@ -3,3 +3,8 @@ dist/
 release/
 *.log
 .DS_Store
+.env
+.playwright-cli/
+output/
+server/data/
+pulseboard-data/

@@ -1,0 +1,3 @@
+services:
+  pulseboard:
+    gpus: all

@@ -5,22 +5,74 @@
 
   **每一段负载，都有迹可循。**
 
-  一款为 Windows 开发者打造的中文资源监控看板。<br>
-  实时查看 CPU、内存、GPU、显存、磁盘与网络，并在本机保留最近 30 天的完整历史。
+  面向 Windows、Linux 与 NAS 的中文资源监控看板。<br>
+  实时查看 CPU、内存、GPU、显存、磁盘与网络，并保留最近 30 天的完整历史。
 
   [![Release](https://img.shields.io/github/v/release/piercemacleod0-hub/PulseBoard?style=flat-square&color=7c5cff)](https://github.com/piercemacleod0-hub/PulseBoard/releases/latest)
-  [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-63e5ff?style=flat-square&logo=windows11&logoColor=white)](#系统要求)
+  [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-63e5ff?style=flat-square&logo=windows11&logoColor=white)](#windows-版)
+  [![Docker](https://img.shields.io/badge/Docker-AMD64%20%7C%20ARM64-2496ed?style=flat-square&logo=docker&logoColor=white)](#nas--linux-web-版)
   [![License](https://img.shields.io/github/license/piercemacleod0-hub/PulseBoard?style=flat-square&color=4de0ac)](LICENSE)
   [![Privacy](https://img.shields.io/badge/数据-仅保存在本机-ffbd66?style=flat-square)](#隐私与数据)
 
   <br>
 
-  [**下载安装版**](https://github.com/piercemacleod0-hub/PulseBoard/releases/latest) · [**下载便携版**](https://github.com/piercemacleod0-hub/PulseBoard/releases/latest) · [反馈问题](https://github.com/piercemacleod0-hub/PulseBoard/issues)
+  [**Windows 下载**](https://github.com/piercemacleod0-hub/PulseBoard/releases/latest) · [**NAS 部署教程**](docs/NAS_DEPLOYMENT.md) · [反馈问题](https://github.com/piercemacleod0-hub/PulseBoard/issues)
 </div>
 
 ---
 
 ![PulseBoard 中文资源监控看板](docs/images/dashboard.png)
+
+## v2.0.0：Linux / NAS Web 版
+
+PulseBoard 现在可以作为后台服务部署在群晖、威联通、飞牛、Unraid、TrueNAS 和普通 Linux 主机上。通过电脑或手机浏览器访问看板，不需要 NAS 连接显示器。
+
+- Docker Compose 一键部署，支持 AMD64 与 ARM64。
+- 直接读取 NAS 主机的 `/proc` 和 `/sys`，避免只监控到容器自身。
+- 内置密码登录，历史数据通过挂载目录持久保存。
+- 支持手机、平板和电脑自适应布局。
+- GitHub Actions 自动发布多架构镜像到 GHCR。
+
+<table>
+  <tr>
+    <td width="72%"><img src="docs/images/nas-web.png" alt="PulseBoard NAS 桌面浏览器看板"></td>
+    <td width="28%"><img src="docs/images/nas-mobile.png" alt="PulseBoard NAS 手机看板"></td>
+  </tr>
+  <tr>
+    <td align="center">桌面浏览器</td>
+    <td align="center">手机浏览器</td>
+  </tr>
+</table>
+
+## NAS / Linux Web 版
+
+### 1. 准备部署文件
+
+```bash
+mkdir pulseboard && cd pulseboard
+curl -O https://raw.githubusercontent.com/piercemacleod0-hub/PulseBoard/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/piercemacleod0-hub/PulseBoard/main/.env.example
+```
+
+编辑 `.env`，把 `PULSEBOARD_PASSWORD` 改为自己的访问密码，然后启动：
+
+```bash
+docker compose up -d
+```
+
+### 2. 打开看板
+
+在电脑或手机浏览器中访问：
+
+```text
+http://NAS的IP地址:8090
+```
+
+数据保存在部署目录下的 `pulseboard-data` 文件夹。升级镜像不会删除历史记录。
+
+详细步骤、NVIDIA GPU 支持和常见问题请查看 [NAS 部署教程](docs/NAS_DEPLOYMENT.md)。
+
+## Windows 版
 
 ## v1.1.0：曲线现在可以精确读数
 
@@ -42,12 +94,14 @@
 | 📊 实时资源看板 | CPU、内存、GPU、显存、磁盘读写和网络流量每 5 秒刷新 |
 | 🕒 长期历史曲线 | 支持回看最近 1 小时、6 小时、24 小时、7 天和 30 天 |
 | 🎯 交互式读数 | 纵坐标显示单位，悬停预览数据，点击可锁定时间与数值 |
+| 🌐 NAS Web 看板 | 通过电脑或手机浏览器访问，内置密码登录和响应式布局 |
+| 🐳 多架构容器 | Docker 镜像同时支持 Linux AMD64 和 ARM64 NAS |
 | 🎮 NVIDIA GPU 监控 | 显示 GPU 使用率、温度、显存用量和显卡型号 |
 | 💾 自动本地保存 | 按天写入轻量 JSONL 文件，超过 30 天自动清理 |
 | 🖥️ 系统托盘常驻 | 关闭主窗口后继续记录，双击托盘图标可重新打开 |
 | 🔒 隐私优先 | 不上传数据、不需要账号，也不运行远程服务 |
 
-## 下载安装
+## Windows 下载安装
 
 前往 [**Releases 下载页**](https://github.com/piercemacleod0-hub/PulseBoard/releases/latest)，根据需要选择：
 
@@ -76,6 +130,7 @@
 ## 系统要求
 
 - Windows 10 或 Windows 11（64 位）
+- NAS Web 版需要 Docker / Container Manager，并支持 Linux AMD64 或 ARM64
 - NVIDIA 显卡可获得完整的 GPU、显存和温度数据
 - AMD / Intel 显卡可以运行，但部分驱动可能只提供基础信息
 
