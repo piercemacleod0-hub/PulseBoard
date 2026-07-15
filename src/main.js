@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, clipboard, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -7,6 +7,7 @@ const QRCode = require('qrcode');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const si = require('systeminformation');
+const { offlineSample, gapMarkers, prepareHistory } = require('./history');
 const execFileAsync = promisify(execFile);
 
 const SAMPLE_MS = 5000;
@@ -18,8 +19,10 @@ let quitting = false;
 let collecting = false;
 let timer;
 let latest = null;
-let shareSettings = null;
+let settings = null;
 let webServerModule = null;
+let offlineWritten = false;
+const isPrimaryInstance = app.requestSingleInstanceLock();
 
 const dataDir = path.join(app.getPath('userData'), 'history');
 const settingsFile = path.join(app.getPath('userData'), 'settings.json');
@@ -38,20 +41,52 @@ function number(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function defaultShareSettings() {
-  return { enabled: false, password: `PB-${crypto.randomBytes(4).toString('hex')}`, port: 8090 };
+function defaultSettings() {
+  return {
+    enabled: false,
+    password: `PB-${crypto.randomBytes(4).toString('hex')}`,
+    port: 8090,
+    launchAtLogin: true
+  };
 }
 
-function loadShareSettings() {
+function loadSettings() {
   try {
     const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    return { ...defaultShareSettings(), ...saved, enabled: Boolean(saved.enabled) };
-  } catch { return defaultShareSettings(); }
+    return {
+      ...defaultSettings(),
+      ...saved,
+      enabled: Boolean(saved.enabled),
+      launchAtLogin: saved.launchAtLogin !== false
+    };
+  } catch { return defaultSettings(); }
 }
 
-function saveShareSettings() {
+function saveSettings() {
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify(shareSettings, null, 2), 'utf8');
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf8');
+}
+
+function autoStartPath() {
+  return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+}
+
+function applyAutoStart(enabled) {
+  if (process.platform !== 'win32' || !app.isPackaged) return;
+  app.setLoginItemSettings({
+    openAtLogin: Boolean(enabled),
+    path: autoStartPath(),
+    args: ['--hidden']
+  });
+}
+
+function autoStartInfo() {
+  const supported = process.platform === 'win32';
+  let active = Boolean(settings?.launchAtLogin);
+  if (supported && app.isPackaged) {
+    active = app.getLoginItemSettings({ path: autoStartPath(), args: ['--hidden'] }).openAtLogin;
+  }
+  return { supported, enabled: Boolean(settings?.launchAtLogin), active, packaged: app.isPackaged };
 }
 
 function lanAddresses() {
@@ -73,8 +108,8 @@ async function startMobileSharing() {
   await webServerModule.startServer({
     readOnly: true,
     dataDir,
-    password: shareSettings.password,
-    port: shareSettings.port,
+    password: settings.password,
+    port: settings.port,
     retentionDays: RETENTION_DAYS,
     version: app.getVersion(),
     platform: 'Windows 手机共享',
@@ -88,10 +123,10 @@ async function stopMobileSharing() {
 
 async function sharingInfo() {
   const addresses = lanAddresses();
-  const urls = addresses.map((address) => `http://${address}:${shareSettings.port}`);
-  const primaryUrl = urls[0] || `http://127.0.0.1:${shareSettings.port}`;
-  const qrCode = shareSettings.enabled ? await QRCode.toDataURL(primaryUrl, { margin: 1, width: 220, color: { dark: '#0b1020', light: '#ffffff' } }) : null;
-  return { ...shareSettings, urls, primaryUrl, qrCode, hasLanAddress: addresses.length > 0 };
+  const urls = addresses.map((address) => `http://${address}:${settings.port}`);
+  const primaryUrl = urls[0] || `http://127.0.0.1:${settings.port}`;
+  const qrCode = settings.enabled ? await QRCode.toDataURL(primaryUrl, { margin: 1, width: 220, color: { dark: '#0b1020', light: '#ffffff' } }) : null;
+  return { enabled: settings.enabled, password: settings.password, port: settings.port, urls, primaryUrl, qrCode, hasLanAddress: addresses.length > 0 };
 }
 
 async function readDiskStats() {
@@ -122,7 +157,7 @@ async function collectSample() {
     const gpu = controllers.find((item) => /nvidia/i.test(item.vendor || item.model || '')) || controllers[0] || {};
     const net = (networks || []).filter((item) => item.operstate === 'up' || item.rx_sec > 0 || item.tx_sec > 0);
     const diskStats = disks || {};
-    latest = {
+    const sample = {
       t: Date.now(),
       cpu: number(load.currentLoad),
       memory: memory.total ? (memory.active / memory.total) * 100 : 0,
@@ -139,7 +174,10 @@ async function collectSample() {
       netUp: net.reduce((sum, item) => sum + number(item.tx_sec), 0)
     };
     fs.mkdirSync(dataDir, { recursive: true });
-    fs.appendFileSync(historyFile(latest.t), `${JSON.stringify(latest)}\n`, 'utf8');
+    const markers = gapMarkers(latest, sample, { sampleMs: SAMPLE_MS, reason: 'collector-gap' });
+    for (const marker of markers) fs.appendFileSync(historyFile(marker.t), `${JSON.stringify(marker)}\n`, 'utf8');
+    latest = sample;
+    fs.appendFileSync(historyFile(sample.t), `${JSON.stringify(sample)}\n`, 'utf8');
     cleanupOldFiles();
     mainWindow?.webContents.send('sample', latest);
     return latest;
@@ -149,6 +187,26 @@ async function collectSample() {
   } finally {
     collecting = false;
   }
+}
+
+function readLatestStoredSample() {
+  if (!fs.existsSync(dataDir)) return null;
+  const files = fs.readdirSync(dataDir).filter((name) => name.endsWith('.jsonl')).sort().reverse();
+  for (const file of files) {
+    const lines = fs.readFileSync(path.join(dataDir, file), 'utf8').trim().split('\n');
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try { return JSON.parse(lines[index]); } catch { /* 继续寻找完整记录 */ }
+    }
+  }
+  return null;
+}
+
+function appendOfflineMarker(reason = 'app-exit') {
+  if (offlineWritten || !latest || latest.offline) return;
+  offlineWritten = true;
+  const marker = offlineSample(latest, Date.now(), 'start', reason);
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.appendFileSync(historyFile(marker.t), `${JSON.stringify(marker)}\n`, 'utf8');
 }
 
 function cleanupOldFiles() {
@@ -178,12 +236,7 @@ function readHistory(since) {
       } catch { /* 跳过不完整的末行 */ }
     }
   }
-  if (points.length <= MAX_POINTS) return points;
-  const stride = Math.ceil(points.length / MAX_POINTS);
-  const sampled = [];
-  for (let i = 0; i < points.length; i += stride) sampled.push(points[i]);
-  if (sampled.at(-1)?.t !== points.at(-1)?.t) sampled.push(points.at(-1));
-  return sampled;
+  return prepareHistory(points, MAX_POINTS, { sampleMs: SAMPLE_MS });
 }
 
 function createWindow() {
@@ -194,6 +247,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#080b14',
     title: 'PulseBoard 资源看板',
+    show: !process.argv.includes('--hidden'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -211,6 +265,12 @@ function createWindow() {
               document.getElementById('shareButton')?.click();
               return;
             }
+            if (${Boolean(process.env.PULSEBOARD_SCREENSHOT_SETTINGS)}) {
+              document.getElementById('settingsButton')?.click();
+              return;
+            }
+            const requestedRange = ${number(process.env.PULSEBOARD_SCREENSHOT_RANGE, 0)};
+            if (requestedRange) document.querySelector('button[data-range="' + requestedRange + '"]')?.click();
             const canvas = document.getElementById('cpuChart');
             const rect = canvas.getBoundingClientRect();
             canvas.dispatchEvent(new MouseEvent('click', {
@@ -234,6 +294,32 @@ function createWindow() {
   });
 }
 
+function csvCell(value) {
+  const text = String(value ?? '');
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+async function exportHistory(rangeMs) {
+  const safeRange = Math.min(Math.max(number(rangeMs, 3600000), 3600000), RETENTION_DAYS * 86400000);
+  const points = readHistory(Date.now() - safeRange);
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出 PulseBoard 历史记录',
+    defaultPath: path.join(app.getPath('documents'), `PulseBoard-${dayKey()}.csv`),
+    filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const headers = ['时间', '状态', 'CPU(%)', '内存(%)', '内存已用(B)', '内存总量(B)', 'GPU(%)', '显存已用(B)', '显存总量(B)', 'GPU温度(°C)', '磁盘读取(B/s)', '磁盘写入(B/s)', '网络下载(B/s)', '网络上传(B/s)'];
+  const rows = points.map((point) => [
+    new Date(point.t).toLocaleString('zh-CN', { hour12: false }),
+    point.offline ? '离线' : '在线',
+    point.cpu, point.memory, point.memoryUsed, point.memoryTotal, point.gpu,
+    point.gpuMemory, point.gpuMemoryTotal, point.gpuTemp,
+    point.diskRead, point.diskWrite, point.netDown, point.netUp
+  ].map(csvCell).join(','));
+  fs.writeFileSync(result.filePath, `\uFEFF${headers.join(',')}\r\n${rows.join('\r\n')}`, 'utf8');
+  return { canceled: false, filePath: result.filePath, count: points.length };
+}
+
 function createTray() {
   const iconPath = path.join(__dirname, '..', 'build', 'icon.svg');
   let icon = nativeImage.createFromPath(iconPath);
@@ -249,33 +335,47 @@ function createTray() {
   tray.on('double-click', () => { mainWindow.show(); mainWindow.focus(); });
 }
 
-app.whenReady().then(async () => {
-  shareSettings = loadShareSettings();
-  if (process.env.PULSEBOARD_TEST_SHARE_PASSWORD) {
-    shareSettings = { ...shareSettings, enabled: true, password: process.env.PULSEBOARD_TEST_SHARE_PASSWORD, port: number(process.env.PULSEBOARD_TEST_SHARE_PORT, 8090) };
-  }
-  createWindow();
-  createTray();
-  await collectSample();
-  timer = setInterval(collectSample, SAMPLE_MS);
-  if (shareSettings.enabled) {
-    try { await startMobileSharing(); }
-    catch (error) { shareSettings.enabled = false; saveShareSettings(); mainWindow.webContents.send('sharing-error', error.message); }
-  }
-});
+if (!isPrimaryInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 
-app.on('activate', () => {
-  if (!mainWindow) createWindow();
-  mainWindow.show();
-});
+  app.whenReady().then(async () => {
+    settings = loadSettings();
+    if (process.env.PULSEBOARD_TEST_SHARE_PASSWORD) {
+      settings = { ...settings, enabled: true, password: process.env.PULSEBOARD_TEST_SHARE_PASSWORD, port: number(process.env.PULSEBOARD_TEST_SHARE_PORT, 8090) };
+    }
+    applyAutoStart(settings.launchAtLogin);
+    latest = readLatestStoredSample();
+    createWindow();
+    createTray();
+    await collectSample();
+    timer = setInterval(collectSample, SAMPLE_MS);
+    if (settings.enabled) {
+      try { await startMobileSharing(); }
+      catch (error) { settings.enabled = false; saveSettings(); mainWindow.webContents.send('sharing-error', error.message); }
+    }
+  });
 
-app.on('before-quit', async () => {
-  quitting = true;
-  clearInterval(timer);
-  await stopMobileSharing();
-});
+  app.on('activate', () => {
+    if (!mainWindow) createWindow();
+    mainWindow.show();
+  });
 
-app.on('window-all-closed', (event) => event.preventDefault());
+  app.on('before-quit', async () => {
+    quitting = true;
+    clearInterval(timer);
+    appendOfflineMarker('app-exit');
+    await stopMobileSharing();
+  });
+
+  app.on('window-all-closed', (event) => event.preventDefault());
+}
 
 ipcMain.handle('history:get', (_event, rangeMs) => {
   const safeRange = Math.min(Math.max(number(rangeMs, 3600000), 3600000), RETENTION_DAYS * 86400000);
@@ -283,15 +383,23 @@ ipcMain.handle('history:get', (_event, rangeMs) => {
 });
 ipcMain.handle('latest:get', () => latest);
 ipcMain.handle('data:open', () => shell.openPath(dataDir));
-ipcMain.handle('app:info', () => ({ version: app.getVersion(), retentionDays: RETENTION_DAYS, host: os.hostname() }));
+ipcMain.handle('app:info', () => ({ version: app.getVersion(), retentionDays: RETENTION_DAYS, host: os.hostname(), autoStart: autoStartInfo() }));
+ipcMain.handle('settings:get', () => ({ launchAtLogin: Boolean(settings.launchAtLogin), autoStart: autoStartInfo() }));
+ipcMain.handle('settings:update', (_event, input) => {
+  settings = { ...settings, launchAtLogin: Boolean(input?.launchAtLogin) };
+  applyAutoStart(settings.launchAtLogin);
+  saveSettings();
+  return { launchAtLogin: settings.launchAtLogin, autoStart: autoStartInfo() };
+});
+ipcMain.handle('history:export', (_event, rangeMs) => exportHistory(rangeMs));
 ipcMain.handle('sharing:get', () => sharingInfo());
 ipcMain.handle('sharing:update', async (_event, input) => {
   const password = String(input?.password || '').trim();
   if (password.length < 6 || password.length > 64) throw new Error('访问密码需要 6–64 个字符');
-  shareSettings = { ...shareSettings, enabled: Boolean(input.enabled), password };
-  if (shareSettings.enabled) await startMobileSharing();
+  settings = { ...settings, enabled: Boolean(input.enabled), password };
+  if (settings.enabled) await startMobileSharing();
   else await stopMobileSharing();
-  saveShareSettings();
+  saveSettings();
   return sharingInfo();
 });
 ipcMain.handle('clipboard:write', (_event, text) => clipboard.writeText(String(text || '')));

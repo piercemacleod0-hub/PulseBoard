@@ -17,7 +17,9 @@
       </div>
       <div class="top-actions">
         <div class="status"><span class="status-dot"></span><span id="statusText">正在采集</span></div>
+        <button id="exportData" class="ghost-button">导出 CSV</button>
         <button id="shareButton" class="ghost-button share-button"><span></span>手机访问</button>
+        <button id="settingsButton" class="ghost-button">使用设置</button>
         <button id="openData" class="ghost-button">打开数据目录</button>
       </div>
     </header>
@@ -26,7 +28,7 @@
       <div>
         <p class="eyebrow">实时系统脉搏</p>
         <h2>每一段负载，都有迹可循。</h2>
-        <p class="hero-copy">数据每 5 秒保存到本机，可回看最近 30 天。关闭窗口后仍会在系统托盘继续记录。</p>
+        <p class="hero-copy">每 5 秒保存一次，关机与异常中断会显示为离线区间，重新开机后自动继续记录。</p>
       </div>
       <div class="range-switch" id="rangeSwitch">
         <button data-range="3600000">1 小时</button>
@@ -35,6 +37,14 @@
         <button data-range="604800000">7 天</button>
         <button data-range="2592000000">30 天</button>
       </div>
+    </section>
+
+    <section class="recording-overview" aria-label="记录状态概览">
+      <div><span>本次连续记录</span><strong id="streakValue">--</strong></div>
+      <div><span>所选范围离线</span><strong id="offlineValue">--</strong></div>
+      <div><span>有效数据点</span><strong id="pointsValue">--</strong></div>
+      <div><span>开机自启动</span><strong id="autoStartValue">--</strong></div>
+      <p><i></i>灰色区域代表电脑关机或 PulseBoard 未运行</p>
     </section>
 
     <section class="cards">
@@ -67,28 +77,38 @@
     <section class="chart-grid">
       <article class="chart-card wide">
         <div class="chart-title"><div><span class="legend-dot cyan-dot"></span><h3>CPU 使用率</h3></div><span id="cpuPeak">峰值 --%</span></div>
-        <canvas id="cpuChart"></canvas>
+        <canvas id="cpuChart" tabindex="0" aria-label="CPU 使用率历史曲线"></canvas>
       </article>
       <article class="chart-card wide">
         <div class="chart-title"><div><span class="legend-dot violet-dot"></span><h3>内存使用率</h3></div><span id="memoryPeak">峰值 --%</span></div>
-        <canvas id="memoryChart"></canvas>
+        <canvas id="memoryChart" tabindex="0" aria-label="内存使用率历史曲线"></canvas>
       </article>
       <article class="chart-card">
         <div class="chart-title"><div><span class="legend-dot amber-dot"></span><h3>GPU 与显存</h3></div><span>百分比</span></div>
-        <canvas id="gpuChart"></canvas>
+        <canvas id="gpuChart" tabindex="0" aria-label="GPU 与显存历史曲线"></canvas>
       </article>
       <article class="chart-card">
         <div class="chart-title"><div><span class="legend-dot emerald-dot"></span><h3>磁盘吞吐</h3></div><span id="diskNow">--</span></div>
-        <canvas id="diskChart"></canvas>
+        <canvas id="diskChart" tabindex="0" aria-label="磁盘吞吐历史曲线"></canvas>
       </article>
       <article class="chart-card">
         <div class="chart-title"><div><span class="legend-dot blue-dot"></span><h3>网络流量</h3></div><span id="netNow">--</span></div>
-        <canvas id="networkChart"></canvas>
+        <canvas id="networkChart" tabindex="0" aria-label="网络流量历史曲线"></canvas>
       </article>
     </section>
 
     <footer><span id="hostInfo">本机</span><span>数据仅保存在你的电脑中</span><span id="lastUpdated">等待首条数据</span></footer>
   </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="settingsModal" class="settings-modal" aria-hidden="true">
+    <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header><div><p>运行设置</p><h2 id="settingsTitle">让记录不中断</h2></div><button id="settingsClose" aria-label="关闭">×</button></header>
+      <p class="settings-intro">PulseBoard 可以随 Windows 静默启动，并在系统托盘持续采集，不必每次手动打开窗口。</p>
+      <label class="share-toggle settings-toggle"><span><strong>开机后自动开始记录</strong><small>启动后驻留系统托盘，需要时双击托盘图标打开看板</small></span><input id="launchAtLogin" type="checkbox"><i></i></label>
+      <p id="settingsMessage" class="settings-message"></p>
+      <button id="settingsSave" class="share-save">保存设置</button>
+    </section>
+  </div>
   <div id="shareModal" class="share-modal" aria-hidden="true">
     <section class="share-panel" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
       <header><div><p>局域网实时共享</p><h2 id="shareTitle">用手机查看这台电脑</h2></div><button id="shareClose" aria-label="关闭">×</button></header>

@@ -12,12 +12,13 @@
   <main class="shell">
     <header class="topbar">
       <div class="brand"><div class="brand-mark"><span></span><i></i><b></b></div><div><h1>PulseBoard</h1><p>NAS / Linux 资源历史看板</p></div></div>
-      <div class="top-actions"><div class="status"><span class="status-dot"></span><span id="statusText">正在采集</span></div><button id="openData" class="ghost-button">退出登录</button></div>
+      <div class="top-actions"><div class="status"><span class="status-dot"></span><span id="statusText">正在采集</span></div><button id="exportData" class="ghost-button">导出 CSV</button><button id="openData" class="ghost-button">退出登录</button></div>
     </header>
     <section class="hero">
-      <div><p class="eyebrow">NAS SYSTEM PULSE</p><h2>每一段负载，都有迹可循。</h2><p class="hero-copy">后台持续记录主机资源，可通过电脑或手机回看最近 30 天。</p></div>
+      <div><p class="eyebrow">NAS SYSTEM PULSE</p><h2>每一段负载，都有迹可循。</h2><p class="hero-copy">每 5 秒保存一次，停机与采集中断会显示为离线区间。</p></div>
       <div class="range-switch" id="rangeSwitch"><button data-range="3600000">1 小时</button><button class="active" data-range="21600000">6 小时</button><button data-range="86400000">24 小时</button><button data-range="604800000">7 天</button><button data-range="2592000000">30 天</button></div>
     </section>
+    <section class="recording-overview" aria-label="记录状态概览"><div><span>本次连续记录</span><strong id="streakValue">--</strong></div><div><span>所选范围离线</span><strong id="offlineValue">--</strong></div><div><span>有效数据点</span><strong id="pointsValue">--</strong></div><div><span>运行方式</span><strong id="autoStartValue">后台常驻</strong></div><p><i></i>灰色区域代表服务器关机或 PulseBoard 未运行</p></section>
     <section class="cards">
       <article class="metric-card cyan"><div class="metric-head"><span>CPU</span><span class="metric-tag">处理器</span></div><strong id="cpuValue">--</strong><small>%</small><div class="mini-track"><i id="cpuBar"></i></div><p>当前总使用率</p></article>
       <article class="metric-card violet"><div class="metric-head"><span>内存</span><span class="metric-tag" id="memoryDetail">-- / --</span></div><strong id="memoryValue">--</strong><small>%</small><div class="mini-track"><i id="memoryBar"></i></div><p>活动内存占比</p></article>
@@ -25,14 +26,15 @@
       <article class="metric-card emerald"><div class="metric-head"><span>显存</span><span class="metric-tag" id="vramDetail">-- / --</span></div><strong id="vramValue">--</strong><small>%</small><div class="mini-track"><i id="vramBar"></i></div><p>独立显存占比</p></article>
     </section>
     <section class="chart-grid">
-      <article class="chart-card wide"><div class="chart-title"><div><span class="legend-dot cyan-dot"></span><h3>CPU 使用率</h3></div><span id="cpuPeak">峰值 --%</span></div><canvas id="cpuChart"></canvas></article>
-      <article class="chart-card wide"><div class="chart-title"><div><span class="legend-dot violet-dot"></span><h3>内存使用率</h3></div><span id="memoryPeak">峰值 --%</span></div><canvas id="memoryChart"></canvas></article>
-      <article class="chart-card"><div class="chart-title"><div><span class="legend-dot amber-dot"></span><h3>GPU 与显存</h3></div><span>百分比</span></div><canvas id="gpuChart"></canvas></article>
-      <article class="chart-card"><div class="chart-title"><div><span class="legend-dot emerald-dot"></span><h3>磁盘吞吐</h3></div><span id="diskNow">--</span></div><canvas id="diskChart"></canvas></article>
-      <article class="chart-card"><div class="chart-title"><div><span class="legend-dot blue-dot"></span><h3>网络流量</h3></div><span id="netNow">--</span></div><canvas id="networkChart"></canvas></article>
+      <article class="chart-card wide"><div class="chart-title"><div><span class="legend-dot cyan-dot"></span><h3>CPU 使用率</h3></div><span id="cpuPeak">峰值 --%</span></div><canvas id="cpuChart" tabindex="0" aria-label="CPU 使用率历史曲线"></canvas></article>
+      <article class="chart-card wide"><div class="chart-title"><div><span class="legend-dot violet-dot"></span><h3>内存使用率</h3></div><span id="memoryPeak">峰值 --%</span></div><canvas id="memoryChart" tabindex="0" aria-label="内存使用率历史曲线"></canvas></article>
+      <article class="chart-card"><div class="chart-title"><div><span class="legend-dot amber-dot"></span><h3>GPU 与显存</h3></div><span>百分比</span></div><canvas id="gpuChart" tabindex="0" aria-label="GPU 与显存历史曲线"></canvas></article>
+      <article class="chart-card"><div class="chart-title"><div><span class="legend-dot emerald-dot"></span><h3>磁盘吞吐</h3></div><span id="diskNow">--</span></div><canvas id="diskChart" tabindex="0" aria-label="磁盘吞吐历史曲线"></canvas></article>
+      <article class="chart-card"><div class="chart-title"><div><span class="legend-dot blue-dot"></span><h3>网络流量</h3></div><span id="netNow">--</span></div><canvas id="networkChart" tabindex="0" aria-label="网络流量历史曲线"></canvas></article>
     </section>
     <footer><span id="hostInfo">NAS</span><span>数据仅保存在你的 NAS 中</span><span id="lastUpdated">等待首条数据</span></footer>
   </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/bridge.js"></script><script src="/assets/renderer.js"></script>
 </body>
 </html>
