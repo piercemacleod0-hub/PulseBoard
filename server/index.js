@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const si = require('systeminformation');
+const { offlineSample, gapMarkers, prepareHistory } = require('../src/history');
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -25,10 +26,11 @@ let collecting = false;
 let lastCleanup = 0;
 let readOnly = false;
 let collectorTimer = null;
-let serverVersion = '2.1.0';
+let serverVersion = '2.2.0';
 let serverPlatform = 'NAS / Linux Web';
 let serverHostName = null;
 let previous = { cpu: null, disk: null, net: null, time: null };
+let offlineWritten = false;
 const sessions = new Map();
 
 function number(value, fallback = 0) {
@@ -187,9 +189,12 @@ async function collectSample() {
   if (collecting) return;
   collecting = true;
   try {
-    latest = hasLinuxHostMetrics() ? await collectLinuxHost() : await collectFallback();
+    const sample = hasLinuxHostMetrics() ? await collectLinuxHost() : await collectFallback();
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.appendFileSync(historyFile(latest.t), `${JSON.stringify(latest)}\n`, 'utf8');
+    const markers = gapMarkers(latest, sample, { sampleMs: SAMPLE_MS, reason: 'collector-gap' });
+    for (const marker of markers) fs.appendFileSync(historyFile(marker.t), `${JSON.stringify(marker)}\n`, 'utf8');
+    latest = sample;
+    fs.appendFileSync(historyFile(sample.t), `${JSON.stringify(sample)}\n`, 'utf8');
     if (Date.now() - lastCleanup > 3600000) cleanupOldFiles();
   } catch (error) {
     console.error('[PulseBoard] 采集失败:', error.message);
@@ -221,11 +226,7 @@ function readHistory(since) {
       catch { /* 忽略异常末行 */ }
     }
   }
-  if (points.length <= MAX_POINTS) return points;
-  const stride = Math.ceil(points.length / MAX_POINTS);
-  const sampled = points.filter((_point, index) => index % stride === 0);
-  if (sampled.at(-1)?.t !== points.at(-1)?.t) sampled.push(points.at(-1));
-  return sampled;
+  return prepareHistory(points, MAX_POINTS, { sampleMs: SAMPLE_MS });
 }
 
 function readLatestFromHistory() {
@@ -315,7 +316,7 @@ const server = http.createServer(async (request, response) => {
   if (!isAuthenticated(request)) return redirect(response, '/login');
 
   if (url.pathname === '/api/latest') { if (readOnly) latest = readLatestFromHistory(); return json(response, latest); }
-  if (url.pathname === '/api/info') return json(response, { version: serverVersion, retentionDays: RETENTION_DAYS, host: serverHostName || readHostName(), platform: serverPlatform });
+  if (url.pathname === '/api/info') return json(response, { version: serverVersion, retentionDays: RETENTION_DAYS, host: serverHostName || readHostName(), platform: serverPlatform, autoStart: { supported: false, active: true } });
   if (url.pathname === '/api/history') {
     const range = Math.min(Math.max(number(url.searchParams.get('range'), 21600000), 3600000), RETENTION_DAYS * 86400000);
     return json(response, readHistory(Date.now() - range));
@@ -340,9 +341,11 @@ async function startServer(options = {}) {
   serverPlatform = options.platform || serverPlatform;
   serverHostName = options.hostName || null;
   sessions.clear();
+  offlineWritten = false;
   fs.mkdirSync(DATA_DIR, { recursive: true });
   if (readOnly) latest = readLatestFromHistory();
   else {
+    latest = readLatestFromHistory();
     await collectSample();
     collectorTimer = setInterval(collectSample, SAMPLE_MS);
   }
@@ -356,6 +359,11 @@ async function startServer(options = {}) {
 
 async function stopServer() {
   if (collectorTimer) { clearInterval(collectorTimer); collectorTimer = null; }
+  if (!readOnly && latest && !latest.offline && !offlineWritten) {
+    offlineWritten = true;
+    const marker = offlineSample(latest, Date.now(), 'start', 'server-exit');
+    fs.appendFileSync(historyFile(marker.t), `${JSON.stringify(marker)}\n`, 'utf8');
+  }
   if (!server.listening) return;
   await new Promise((resolve) => server.close(resolve));
   sessions.clear();
