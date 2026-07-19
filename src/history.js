@@ -9,6 +9,7 @@ function number(value, fallback = 0) {
 function offlineSample(reference = {}, timestamp = Date.now(), phase = 'offline', reason = 'gap') {
   return {
     t: timestamp,
+    sampleIntervalMs: number(reference.sampleIntervalMs, DEFAULT_SAMPLE_MS),
     cpu: 0,
     memory: 0,
     memoryUsed: 0,
@@ -30,8 +31,12 @@ function offlineSample(reference = {}, timestamp = Date.now(), phase = 'offline'
 
 function gapMarkers(previous, next, options = {}) {
   if (!previous?.t || !next?.t || next.t <= previous.t) return [];
-  const sampleMs = number(options.sampleMs, DEFAULT_SAMPLE_MS);
-  const offlineAfterMs = number(options.offlineAfterMs, DEFAULT_OFFLINE_AFTER_MS);
+  const sampleMs = Math.max(
+    number(options.sampleMs, DEFAULT_SAMPLE_MS),
+    number(previous.sampleIntervalMs, 0),
+    number(next.sampleIntervalMs, 0)
+  );
+  const offlineAfterMs = number(options.offlineAfterMs, Math.max(DEFAULT_OFFLINE_AFTER_MS, Math.ceil(sampleMs * 2.5)));
   if (next.t - previous.t <= offlineAfterMs) return [];
 
   const start = previous.offline

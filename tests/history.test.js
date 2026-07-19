@@ -19,6 +19,18 @@ test('短暂采集抖动不会被标记为离线', () => {
   assert.deepEqual(gapMarkers(sample(1000), sample(16000)), []);
 });
 
+test('30 秒低频采样不会把正常间隔误判为离线', () => {
+  const first = sample(1000, { sampleIntervalMs: 30000 });
+  const second = sample(31000, { sampleIntervalMs: 30000 });
+  assert.deepEqual(gapMarkers(first, second), []);
+});
+
+test('切换采样频率时采用较长间隔判断离线', () => {
+  const first = sample(1000, { sampleIntervalMs: 5000 });
+  const second = sample(31000, { sampleIntervalMs: 30000 });
+  assert.deepEqual(gapMarkers(first, second), []);
+});
+
 test('长时间空档会补齐离线开始和结束两个零值点', () => {
   const markers = gapMarkers(sample(1000), sample(31000), { sampleMs: 5000, offlineAfterMs: 20000 });
   assert.equal(markers.length, 2);

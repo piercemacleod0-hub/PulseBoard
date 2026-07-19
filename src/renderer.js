@@ -1,6 +1,4 @@
-const SAMPLE_MS = 5000;
-const OFFLINE_AFTER_MS = 20000;
-const state = { points: [], range: 21600000, latest: null, info: null };
+const state = { points: [], range: 21600000, latest: null, info: null, sampleIntervalMs: 10000, needsReload: false };
 const colors = { cpu: '#63e5ff', memory: '#9b7cff', gpu: '#ffbd66', vram: '#4de0ac', disk: '#4de0ac', network: '#5f8cff' };
 const interactions = new Map();
 const $ = (id) => document.getElementById(id);
@@ -66,6 +64,8 @@ function updateCards(sample) {
   $('lastUpdated').textContent = `更新于 ${new Date(sample.t).toLocaleString('zh-CN', { hour12: false })}`;
   $('statusText').textContent = '实时记录中';
   document.querySelector('.status')?.classList.remove('error');
+  if ($('appCpuValue')) $('appCpuValue').textContent = `${(Number(sample.pulseboardCpu) || 0).toFixed(1)}%`;
+  if ($('appMemoryValue')) $('appMemoryValue').textContent = bytes(sample.pulseboardMemory);
 }
 
 function offlineRanges() {
@@ -322,7 +322,8 @@ async function loadHistory() {
   interactions.forEach((interaction) => { interaction.index = null; interaction.locked = false; });
   const latestOnline = [...state.points].reverse().find((point) => !point.offline);
   if (latestOnline) updateCards(latestOnline);
-  renderCharts();
+  if (document.hidden) state.needsReload = true;
+  else renderCharts();
 }
 
 function showToast(message, kind = 'success') {
@@ -358,6 +359,7 @@ const settingsModal = $('settingsModal');
 $('settingsButton')?.addEventListener('click', async () => {
   const current = await window.pulseboard.getSettings();
   $('launchAtLogin').checked = current.launchAtLogin;
+  $('sampleInterval').value = String(current.sampleIntervalMs);
   $('settingsMessage').textContent = current.autoStart.packaged ? '开机后会静默在系统托盘开始记录。' : '安装版中生效；开发预览不会修改 Windows 启动项。';
   settingsModal.classList.add('open');
   settingsModal.setAttribute('aria-hidden', 'false');
@@ -367,25 +369,40 @@ $('settingsClose')?.addEventListener('click', () => {
   settingsModal.setAttribute('aria-hidden', 'true');
 });
 $('settingsSave')?.addEventListener('click', async () => {
-  const result = await window.pulseboard.updateSettings({ launchAtLogin: $('launchAtLogin').checked });
+  const result = await window.pulseboard.updateSettings({
+    launchAtLogin: $('launchAtLogin').checked,
+    sampleIntervalMs: Number($('sampleInterval').value)
+  });
   state.info = state.info || {};
   state.info.autoStart = result.autoStart;
+  state.info.sampleIntervalMs = result.sampleIntervalMs;
+  state.sampleIntervalMs = result.sampleIntervalMs;
+  $('sampleDescription').textContent = `当前每 ${result.sampleIntervalMs / 1000} 秒保存一次`;
   renderOverview();
   $('settingsClose').click();
-  showToast(result.launchAtLogin ? '开机自启动已开启' : '开机自启动已关闭');
+  showToast(`设置已保存 · 每 ${result.sampleIntervalMs / 1000} 秒采样`);
 });
 settingsModal?.addEventListener('click', (event) => { if (event.target === settingsModal) $('settingsClose').click(); });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && settingsModal?.classList.contains('open')) $('settingsClose').click();
 });
 
-window.addEventListener('resize', () => requestAnimationFrame(renderCharts));
+window.addEventListener('resize', () => {
+  if (!document.hidden) requestAnimationFrame(renderCharts);
+});
 window.pulseboard.onSample((sample) => {
+  if (document.hidden) {
+    state.latest = sample;
+    state.needsReload = true;
+    return;
+  }
   updateCards(sample);
   const previous = state.points.at(-1);
-  if (previous && sample.t - previous.t > OFFLINE_AFTER_MS) {
-    if (!previous.offline) state.points.push(offlinePoint(previous, previous.t + SAMPLE_MS, 'start'));
-    state.points.push(offlinePoint(previous, sample.t - SAMPLE_MS, 'end'));
+  const interval = Math.max(Number(previous?.sampleIntervalMs) || 0, Number(sample.sampleIntervalMs) || state.sampleIntervalMs);
+  const offlineAfter = Math.max(20000, Math.ceil(interval * 2.5));
+  if (previous && sample.t - previous.t > offlineAfter) {
+    if (!previous.offline) state.points.push(offlinePoint(previous, previous.t + interval, 'start'));
+    state.points.push(offlinePoint(previous, sample.t - interval, 'end'));
   }
   state.points.push(sample);
   const cutoff = Date.now() - state.range;
@@ -395,6 +412,12 @@ window.pulseboard.onSample((sample) => {
   });
   renderCharts();
 });
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden || !state.needsReload) return;
+  state.needsReload = false;
+  await loadHistory();
+  updateCards(state.latest);
+});
 window.pulseboard.onError((message) => {
   $('statusText').textContent = `采集异常：${message}`;
   document.querySelector('.status')?.classList.add('error');
@@ -402,6 +425,8 @@ window.pulseboard.onError((message) => {
 
 (async () => {
   state.info = await window.pulseboard.getAppInfo();
+  state.sampleIntervalMs = state.info.sampleIntervalMs || state.sampleIntervalMs;
+  $('sampleDescription').textContent = `当前每 ${state.sampleIntervalMs / 1000} 秒保存一次`;
   $('hostInfo').textContent = `${state.info.host} · PulseBoard ${state.info.version}`;
   await loadHistory();
   const latest = await window.pulseboard.getLatest();
