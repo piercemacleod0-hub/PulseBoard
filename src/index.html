@@ -16,6 +16,7 @@
         <div><h1>PulseBoard</h1><p>本机资源历史看板</p></div>
       </div>
       <div class="top-actions">
+        <div class="power-badge"><span>✓</span>低功耗</div>
         <div class="status"><span class="status-dot"></span><span id="statusText">正在采集</span></div>
         <button id="exportData" class="ghost-button">导出 CSV</button>
         <button id="shareButton" class="ghost-button share-button"><span></span>手机访问</button>
@@ -28,7 +29,7 @@
       <div>
         <p class="eyebrow">实时系统脉搏</p>
         <h2>每一段负载，都有迹可循。</h2>
-        <p class="hero-copy">每 5 秒保存一次，关机与异常中断会显示为离线区间，重新开机后自动继续记录。</p>
+        <p class="hero-copy"><span id="sampleDescription">当前每 10 秒保存一次</span>，关机与异常中断会显示为离线区间，重新开机后自动继续记录。</p>
       </div>
       <div class="range-switch" id="rangeSwitch">
         <button data-range="3600000">1 小时</button>
@@ -103,8 +104,14 @@
   <div id="settingsModal" class="settings-modal" aria-hidden="true">
     <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <header><div><p>运行设置</p><h2 id="settingsTitle">让记录不中断</h2></div><button id="settingsClose" aria-label="关闭">×</button></header>
-      <p class="settings-intro">PulseBoard 可以随 Windows 静默启动，并在系统托盘持续采集，不必每次手动打开窗口。</p>
+      <p class="settings-intro">PulseBoard 可以随 Windows 静默启动，并在系统托盘持续采集。2.3 已关闭界面独显加速，窗口隐藏后也不再反复绘制曲线。</p>
+      <div class="power-summary">
+        <div><span>界面渲染</span><strong>低功耗 · 不占用独显</strong></div>
+        <div><span>PulseBoard CPU</span><strong id="appCpuValue">--</strong></div>
+        <div><span>占用内存</span><strong id="appMemoryValue">--</strong></div>
+      </div>
       <label class="share-toggle settings-toggle"><span><strong>开机后自动开始记录</strong><small>启动后驻留系统托盘，需要时双击托盘图标打开看板</small></span><input id="launchAtLogin" type="checkbox"><i></i></label>
+      <label class="settings-field"><span><strong>采样间隔</strong><small>10 秒兼顾实时性和安静；跑短任务时可以切换到 5 秒</small></span><select id="sampleInterval"><option value="5000">5 秒 · 高频</option><option value="10000">10 秒 · 推荐</option><option value="30000">30 秒 · 最省电</option></select></label>
       <p id="settingsMessage" class="settings-message"></p>
       <button id="settingsSave" class="share-save">保存设置</button>
     </section>

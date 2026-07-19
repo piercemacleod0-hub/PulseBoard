@@ -10,7 +10,8 @@ const si = require('systeminformation');
 const { offlineSample, gapMarkers, prepareHistory } = require('./history');
 const execFileAsync = promisify(execFile);
 
-const SAMPLE_MS = 5000;
+const DEFAULT_SAMPLE_MS = 10000;
+const ALLOWED_SAMPLE_MS = [5000, 10000, 30000];
 const RETENTION_DAYS = 30;
 const MAX_POINTS = 1200;
 let mainWindow;
@@ -22,6 +23,11 @@ let latest = null;
 let settings = null;
 let webServerModule = null;
 let offlineWritten = false;
+
+// PulseBoard is a monitoring tool, so keeping a discrete GPU awake just to draw
+// the dashboard is a poor trade-off. Canvas rendering stays smooth in software
+// while the NVIDIA card remains free to enter its normal idle state.
+app.disableHardwareAcceleration();
 const isPrimaryInstance = app.requestSingleInstanceLock();
 
 const dataDir = path.join(app.getPath('userData'), 'history');
@@ -41,12 +47,26 @@ function number(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeSampleMs(value) {
+  const candidate = number(value, DEFAULT_SAMPLE_MS);
+  return ALLOWED_SAMPLE_MS.includes(candidate) ? candidate : DEFAULT_SAMPLE_MS;
+}
+
+function sampleMs() {
+  return normalizeSampleMs(settings?.sampleIntervalMs);
+}
+
+function offlineAfterMs() {
+  return Math.max(20000, Math.ceil(sampleMs() * 2.5));
+}
+
 function defaultSettings() {
   return {
     enabled: false,
     password: `PB-${crypto.randomBytes(4).toString('hex')}`,
     port: 8090,
-    launchAtLogin: true
+    launchAtLogin: true,
+    sampleIntervalMs: DEFAULT_SAMPLE_MS
   };
 }
 
@@ -57,7 +77,8 @@ function loadSettings() {
       ...defaultSettings(),
       ...saved,
       enabled: Boolean(saved.enabled),
-      launchAtLogin: saved.launchAtLogin !== false
+      launchAtLogin: saved.launchAtLogin !== false,
+      sampleIntervalMs: normalizeSampleMs(saved.sampleIntervalMs)
     };
   } catch { return defaultSettings(); }
 }
@@ -157,8 +178,10 @@ async function collectSample() {
     const gpu = controllers.find((item) => /nvidia/i.test(item.vendor || item.model || '')) || controllers[0] || {};
     const net = (networks || []).filter((item) => item.operstate === 'up' || item.rx_sec > 0 || item.tx_sec > 0);
     const diskStats = disks || {};
+    const appMetrics = app.getAppMetrics();
     const sample = {
       t: Date.now(),
+      sampleIntervalMs: sampleMs(),
       cpu: number(load.currentLoad),
       memory: memory.total ? (memory.active / memory.total) * 100 : 0,
       memoryUsed: number(memory.active),
@@ -171,10 +194,12 @@ async function collectSample() {
       diskRead: number(diskStats.rx_sec),
       diskWrite: number(diskStats.wx_sec),
       netDown: net.reduce((sum, item) => sum + number(item.rx_sec), 0),
-      netUp: net.reduce((sum, item) => sum + number(item.tx_sec), 0)
+      netUp: net.reduce((sum, item) => sum + number(item.tx_sec), 0),
+      pulseboardCpu: appMetrics.reduce((sum, item) => sum + number(item.cpu?.percentCPUUsage), 0),
+      pulseboardMemory: appMetrics.reduce((sum, item) => sum + number(item.memory?.workingSetSize) * 1024, 0)
     };
     fs.mkdirSync(dataDir, { recursive: true });
-    const markers = gapMarkers(latest, sample, { sampleMs: SAMPLE_MS, reason: 'collector-gap' });
+    const markers = gapMarkers(latest, sample, { sampleMs: sampleMs(), offlineAfterMs: offlineAfterMs(), reason: 'collector-gap' });
     for (const marker of markers) fs.appendFileSync(historyFile(marker.t), `${JSON.stringify(marker)}\n`, 'utf8');
     latest = sample;
     fs.appendFileSync(historyFile(sample.t), `${JSON.stringify(sample)}\n`, 'utf8');
@@ -236,7 +261,15 @@ function readHistory(since) {
       } catch { /* 跳过不完整的末行 */ }
     }
   }
-  return prepareHistory(points, MAX_POINTS, { sampleMs: SAMPLE_MS });
+  return prepareHistory(points, MAX_POINTS);
+}
+
+function scheduleCollection(delay = sampleMs()) {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    await collectSample();
+    if (!quitting) scheduleCollection();
+  }, delay);
 }
 
 function createWindow() {
@@ -248,11 +281,13 @@ function createWindow() {
     backgroundColor: '#080b14',
     title: 'PulseBoard 资源看板',
     show: !process.argv.includes('--hidden'),
+    paintWhenInitiallyHidden: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: true
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
@@ -355,7 +390,7 @@ if (!isPrimaryInstance) {
     createWindow();
     createTray();
     await collectSample();
-    timer = setInterval(collectSample, SAMPLE_MS);
+    scheduleCollection();
     if (settings.enabled) {
       try { await startMobileSharing(); }
       catch (error) { settings.enabled = false; saveSettings(); mainWindow.webContents.send('sharing-error', error.message); }
@@ -369,7 +404,7 @@ if (!isPrimaryInstance) {
 
   app.on('before-quit', async () => {
     quitting = true;
-    clearInterval(timer);
+    clearTimeout(timer);
     appendOfflineMarker('app-exit');
     await stopMobileSharing();
   });
@@ -383,13 +418,38 @@ ipcMain.handle('history:get', (_event, rangeMs) => {
 });
 ipcMain.handle('latest:get', () => latest);
 ipcMain.handle('data:open', () => shell.openPath(dataDir));
-ipcMain.handle('app:info', () => ({ version: app.getVersion(), retentionDays: RETENTION_DAYS, host: os.hostname(), autoStart: autoStartInfo() }));
-ipcMain.handle('settings:get', () => ({ launchAtLogin: Boolean(settings.launchAtLogin), autoStart: autoStartInfo() }));
+ipcMain.handle('app:info', () => ({
+  version: app.getVersion(),
+  retentionDays: RETENTION_DAYS,
+  host: os.hostname(),
+  autoStart: autoStartInfo(),
+  lowPowerMode: true,
+  hardwareAcceleration: false,
+  sampleIntervalMs: sampleMs()
+}));
+ipcMain.handle('settings:get', () => ({
+  launchAtLogin: Boolean(settings.launchAtLogin),
+  sampleIntervalMs: sampleMs(),
+  lowPowerMode: true,
+  hardwareAcceleration: false,
+  autoStart: autoStartInfo()
+}));
 ipcMain.handle('settings:update', (_event, input) => {
-  settings = { ...settings, launchAtLogin: Boolean(input?.launchAtLogin) };
+  settings = {
+    ...settings,
+    launchAtLogin: Boolean(input?.launchAtLogin),
+    sampleIntervalMs: normalizeSampleMs(input?.sampleIntervalMs)
+  };
   applyAutoStart(settings.launchAtLogin);
   saveSettings();
-  return { launchAtLogin: settings.launchAtLogin, autoStart: autoStartInfo() };
+  scheduleCollection();
+  return {
+    launchAtLogin: settings.launchAtLogin,
+    sampleIntervalMs: sampleMs(),
+    lowPowerMode: true,
+    hardwareAcceleration: false,
+    autoStart: autoStartInfo()
+  };
 });
 ipcMain.handle('history:export', (_event, rangeMs) => exportHistory(rangeMs));
 ipcMain.handle('sharing:get', () => sharingInfo());

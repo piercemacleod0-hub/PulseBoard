@@ -1,6 +1,6 @@
 {
   "name": "pulseboard",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "一款简洁、漂亮、可长期保存历史记录的 Windows 资源监控看板",
   "main": "src/main.js",
   "author": "piercemacleod0-hub",
